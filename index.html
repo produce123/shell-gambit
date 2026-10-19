@@ -172,7 +172,12 @@
 
         <div class="table">
           <div class="seats" id="seats"></div>
-          <div class="feed" id="feed" aria-live="polite"></div>
+          <div class="feed-box" id="feed-box">
+            <button class="feed-toggle" id="feed-toggle" type="button" aria-expanded="false" aria-controls="feed">
+              <span>对局记录</span><i class="feed-chevron"></i>
+            </button>
+            <div class="feed" id="feed" aria-live="polite"></div>
+          </div>
           <div class="banner" id="banner"></div>
         </div>
 

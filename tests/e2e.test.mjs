@@ -398,6 +398,36 @@ async function testOnlineGame(baseUrl) {
     })()`);
     ok(leak === 'null' || !/shells/.test(leak), '客户端页面上没有暴露弹匣顺序');
 
+    // --- 互动（扔鸡蛋）必须只播一次动画 ---
+    // 曾经中过这个招：房主把互动广播出去时，业务字段里的 from 覆盖了信封的 from，
+    // 于是房主认不出自己的广播，把它当成新互动再转发一次 —— 无限循环，
+    // 手机端就会看到对方「一直在扔鸡蛋」。这里用画面上的计数把它钉死。
+    const readRx = (p) => p.eval(`return Number(document.body.dataset.sgReactions || 0);`);
+    const before = { host: await readRx(host), b: await readRx(b), c: await readRx(c) };
+
+    await c.evalRaw(`document.getElementById('game-react').click()`);
+    await sleep(350);
+    const threw = await c.evalRaw(`(() => {
+      const btn = [...document.querySelectorAll('#modal-layer .throw-btn')]
+        .find((x) => x.dataset.kind === 'egg');
+      if (btn) btn.click();
+      return !!btn;
+    })()`);
+    ok(threw, '互动面板里有扔鸡蛋的按钮');
+
+    await sleep(2500);
+    const mid = { host: await readRx(host), b: await readRx(b), c: await readRx(c) };
+    await sleep(4000); // 再等一会儿，若是回环这里会继续涨
+    const after = { host: await readRx(host), b: await readRx(b), c: await readRx(c) };
+
+    ok(after.host - before.host === 1, `房主只看到 1 次互动动画（实际 ${after.host - before.host} 次）`);
+    ok(after.c - before.c === 1, `扔的人在画面上也只播 1 次（实际 ${after.c - before.c} 次）`);
+    ok(
+      after.host === mid.host && after.c === mid.c,
+      `互动不会无限重复（房主 ${mid.host}→${after.host}，客人 ${mid.c}→${after.c}）`
+    );
+    ok(after.b >= before.b, '旁观的第三家没有崩溃（互动计数正常）');
+
     // 三家一起打完
     const [r1, r2, r3] = await Promise.all([
       autoPlay(host),
@@ -532,6 +562,7 @@ async function testOnlineSync(baseUrl) {
 
 const VIEWPORTS = [
   { w: 360, h: 640, label: '小屏手机 360×640', mobile: true },
+  { w: 390, h: 844, label: '中屏手机 390×844', mobile: true },
   { w: 430, h: 932, label: '大屏手机 430×932', mobile: true },
   { w: 768, h: 1024, label: '平板 768×1024', mobile: true },
   { w: 1280, h: 900, label: '桌面 1280×900', mobile: false },
@@ -593,13 +624,18 @@ async function testLayout(baseUrl) {
   try {
     await loadApp(page);
     for (const vp of VIEWPORTS) {
-      await page.conn.send('Emulation.setDeviceMetricsOverride', {
-        width: vp.w,
-        height: vp.h,
-        deviceScaleFactor: 1,
-        mobile: vp.mobile,
-      });
+      await page.setViewport(vp.w, vp.h, vp.mobile);
       await sleep(400);
+
+      // 视口必须精确等于目标尺寸：Windows 上 --window-size 会被最小窗口宽度夹住，
+      // 不覆盖视口的话「360×640 小屏手机」实际测的是 512px 宽的窗口
+      const realVp = await page.evalRaw(
+        `({ w: window.innerWidth, h: window.innerHeight })`
+      );
+      ok(
+        realVp.w === vp.w,
+        `${vp.label} 视口真的就是 ${vp.w}px 宽（实际 ${realVp.w}px）`
+      );
 
       // 确保停在首页（用真实入口返回，不直接改类名）
       const onHome = await page.eval(
@@ -618,6 +654,20 @@ async function testLayout(baseUrl) {
       ok(
         home.smallTargets.length === 0,
         `${vp.label} 首页按钮都够大${home.smallTargets.length ? `：${home.smallTargets}` : ''}`
+      );
+
+      // 主标题必须完整待在一行里（手机上曾经左右各被切掉一截）
+      const logo = await page.evalRaw(`(() => {
+        const el = document.querySelector('.logo');
+        const r = el.getBoundingClientRect();
+        return {
+          left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width),
+          vw: window.innerWidth, overflow: Math.max(0, -r.left, r.right - window.innerWidth),
+        };
+      })()`);
+      ok(
+        logo.overflow <= 1,
+        `${vp.label} 标题完整可见（宽 ${logo.width}px，视口 ${logo.vw}px，超出 ${Math.round(logo.overflow)}px）`
       );
 
       // 对局界面（4 人）
@@ -660,6 +710,62 @@ async function testLayout(baseUrl) {
       );
       ok(tap.cardW !== null && tap.cardW >= 60, `${vp.label} 手牌宽度 ${tap.cardW}px ≥ 60px`);
       ok(tap.seats === 4, `${vp.label} 4 个座位都渲染出来了`);
+
+      // 打几步，让对局记录攒起来，验证「最新一条始终看得见」
+      for (let i = 0; i < 8; i++) {
+        await stepOnce(page, { useItems: false });
+        await sleep(260);
+      }
+
+      const collapsed = await page.evalRaw(`(() => {
+        const box = document.getElementById('feed-box');
+        const feed = document.getElementById('feed');
+        const items = [...feed.querySelectorAll('.feed-item')];
+        const visible = items.filter((el) => el.offsetParent !== null);
+        const last = items[items.length - 1];
+        const fr = feed.getBoundingClientRect();
+        const lr = last.getBoundingClientRect();
+        return {
+          open: box.classList.contains('is-open'),
+          total: items.length,
+          visible: visible.length,
+          lastText: last.textContent,
+          lastInView: lr.left >= fr.left - 1 && lr.right <= fr.right + 1,
+          lastInScreen: lr.left >= -1 && lr.right <= window.innerWidth + 1,
+        };
+      })()`);
+      ok(!collapsed.open, `${vp.label} 对局记录默认是收起的`);
+      ok(
+        collapsed.lastInView && collapsed.lastInScreen,
+        `${vp.label} 收起时最新一条完整可见（「${collapsed.lastText}」，共 ${collapsed.total} 条）`
+      );
+
+      // 展开后要能滚动，并且已经滚到最新一条
+      await page.evalRaw(`document.getElementById('feed-toggle').click()`);
+      await sleep(300);
+      const expanded = await page.evalRaw(`(() => {
+        const feed = document.getElementById('feed');
+        const items = [...feed.querySelectorAll('.feed-item')];
+        const last = items[items.length - 1];
+        const fr = feed.getBoundingClientRect();
+        const lr = last.getBoundingClientRect();
+        return {
+          open: document.getElementById('feed-box').classList.contains('is-open'),
+          scrollable: feed.scrollHeight > feed.clientHeight + 1,
+          atBottom: feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 2,
+          lastFullyVisible: lr.bottom <= fr.bottom + 1 && lr.top >= fr.top - 1,
+          inScreen: fr.bottom <= window.innerHeight + 1,
+        };
+      })()`);
+      ok(expanded.open, `${vp.label} 点一下就能展开对局记录`);
+      ok(expanded.scrollable, `${vp.label} 展开后历史可以滚动`);
+      ok(expanded.atBottom, `${vp.label} 展开后自动滚到最新一条`);
+      ok(expanded.lastFullyVisible, `${vp.label} 展开后最新一条完整可见`);
+      ok(expanded.inScreen, `${vp.label} 展开的历史没有顶出屏幕`);
+
+      // 收回去，下一轮视口接着测
+      await page.evalRaw(`document.getElementById('feed-toggle').click()`);
+      await sleep(200);
 
       await page.screenshot(`${SHOTS}layout-${vp.w}x${vp.h}.png`);
       console.log(

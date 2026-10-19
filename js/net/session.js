@@ -93,6 +93,8 @@ export class HostSession extends Emitter {
     this.handled = new Map();
     /** @type {Map<string, number>} peerId → 已确认收到的状态帧序号 */
     this.peerAck = new Map();
+    /** @type {Set<string>} 已经播过的互动 id（广播和单播是同一件事的两份拷贝） */
+    this.seenReactions = new Set();
     this.bus = null;
     this.match = null;
     this.started = false;
@@ -561,25 +563,62 @@ export class HostSession extends Emitter {
   /* ------------------------- 互动 ------------------------- */
 
   _handleReaction(from, msg) {
-    this._broadcastReaction({ kind: msg.kind, from, targetId: msg.targetId });
+    // 自己发出去的广播绕一圈回来了（公共通道会把消息回吐给发布者），直接丢掉。
+    // 少了这一道，房主会把自己的广播当成新互动再转发一次 —— 无限循环。
+    if (from === this.selfId) return;
+    if (!this._reactionFirst(msg.rid)) return;
+    this._broadcastReaction({
+      kind: msg.kind,
+      thrower: msg.thrower || from,
+      targetId: msg.targetId,
+      // 沿用同一个 rid：广播和单播是同一件事的两份拷贝，收方靠它只播一次
+      rid: msg.rid,
+    });
   }
 
   /** 扔鲜花 / 鸡蛋 */
   react(kind, toId) {
-    this._broadcastReaction({ kind, from: this.selfId, targetId: toId });
+    this._broadcastReaction({ kind, thrower: this.selfId, targetId: toId });
   }
 
-  _broadcastReaction(payload) {
+  /**
+   * 把一条互动广播给所有人。
+   *
+   * 注意：互动发起人必须放在 `thrower` 字段里，绝不能叫 `from` ——
+   * `from` 是信封的路由字段，业务数据一旦用同名键就会把「谁发的」覆盖掉，
+   * 于是房主认不出自己的广播，无限转发。
+   */
+  _broadcastReaction({ kind, thrower, targetId, rid }) {
+    const body = {
+      kind,
+      thrower,
+      targetId,
+      rid: rid || makeMsgId(this.selfId),
+    };
     this.bus?.send('all', envelope({
-      id: makeMsgId(this.selfId), from: this.selfId, to: 'all', type: MSG.REACTION, ...payload,
+      ...body, id: makeMsgId(this.selfId), from: this.selfId, to: 'all', type: MSG.REACTION,
     }));
     for (const id of this.roster.keys()) {
       if (id === this.selfId) continue;
       this._sendTo(id, envelope({
-        id: makeMsgId(this.selfId), from: this.selfId, to: id, type: MSG.REACTION, ...payload,
+        ...body, id: makeMsgId(this.selfId), from: this.selfId, to: id, type: MSG.REACTION,
       }));
     }
-    this.emit('reaction', payload);
+    this.emit('reaction', body);
+  }
+
+  /**
+   * 同一条互动可能从多条通道各来一份（广播 + 单播、MQTT + 中转），
+   * 用 rid 去重，保证每个玩家只看到一次动画。
+   */
+  _reactionFirst(rid) {
+    if (!rid) return true;
+    if (this.seenReactions.has(rid)) return false;
+    this.seenReactions.add(rid);
+    if (this.seenReactions.size > 100) {
+      this.seenReactions.delete(this.seenReactions.values().next().value);
+    }
+    return true;
   }
 
   /* ------------------------- 再来一局 ------------------------- */
@@ -634,6 +673,8 @@ export class ClientSession extends Emitter {
     this.closed = false;
     this.participants = [];
     this.rejectedReason = null;
+    /** @type {Set<string>} 已经播过的互动 id */
+    this.seenReactions = new Set();
   }
 
   /** 打开信令通道并寻找房主 */
@@ -726,7 +767,15 @@ export class ClientSession extends Emitter {
         this.emit('over', msg);
         break;
       case MSG.REACTION:
-        this.emit('reaction', { kind: msg.kind, from: msg.from, targetId: msg.targetId });
+        // 广播和单播是同一件事的两份拷贝，按 rid 只播一次
+        if (this._reactionFirst(msg.rid)) {
+          this.emit('reaction', {
+            kind: msg.kind,
+            thrower: msg.thrower || msg.from,
+            targetId: msg.targetId,
+            rid: msg.rid,
+          });
+        }
         break;
       case MSG.BYE: {
         if (from === this.hostId) {
@@ -884,8 +933,21 @@ export class ClientSession extends Emitter {
       to: this.hostId,
       type: MSG.REACTION,
       kind,
+      thrower: this.selfId,
       targetId: toId,
+      rid: makeMsgId(this.selfId),
     }));
+  }
+
+  /** 同一条互动只播一次（见 HostSession 的同名方法） */
+  _reactionFirst(rid) {
+    if (!rid) return true;
+    if (this.seenReactions.has(rid)) return false;
+    this.seenReactions.add(rid);
+    if (this.seenReactions.size > 100) {
+      this.seenReactions.delete(this.seenReactions.values().next().value);
+    }
+    return true;
   }
 
   requestRematch() {

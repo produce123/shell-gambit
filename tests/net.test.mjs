@@ -88,7 +88,7 @@ test('联网：房间号配对 → 大厅 → 开局 → 状态同步 → 动作
     const reaction = await Promise.race([gotReaction, sleep(25000).then(() => null)]);
     assert(reaction, '客户端 B 应该收到扔鸡蛋事件');
     eq(reaction.kind, 'egg', '互动类型');
-    eq(reaction.from, idA, '互动发起者');
+    eq(reaction.thrower, idA, '互动发起者');
     eq(reaction.targetId, idB, '互动目标');
 
     // --- 4. 开局 ---

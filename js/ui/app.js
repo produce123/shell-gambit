@@ -636,8 +636,13 @@ function findAvatarEl(pid) {
 }
 
 function playReaction(r) {
+  // 把「播过多少次互动动画」记在 DOM 上：互动曾经因为房主广播回环而无限重复，
+  // 留一个可观测的数字，自动化测试就能一直盯着这件事不再复发。
+  const n = Number(document.body.dataset.sgReactions || 0) + 1;
+  document.body.dataset.sgReactions = String(n);
+
   const toEl = findAvatarEl(r.targetId);
-  if (toEl) flyProjectile(findAvatarEl(r.from), toEl, r.kind);
+  if (toEl) flyProjectile(findAvatarEl(r.thrower), toEl, r.kind);
   else {
     const anySeat = [...state.seatEls.values()][0];
     if (anySeat) burst(anySeat, r.kind);
@@ -964,7 +969,29 @@ function feedAdd(text, cls) {
   el.className = `feed-item${cls ? ` ${cls}` : ''}`;
   el.textContent = text;
   feed.appendChild(el);
-  while (feed.children.length > 4) feed.firstElementChild.remove();
+  // 多留一些，展开历史时能往回翻；每条只是一个 div，很轻
+  while (feed.children.length > 60) feed.firstElementChild.remove();
+  // 展开状态下始终把最新一条滚进视野
+  if ($('feed-box')?.classList.contains('is-open')) feed.scrollTop = feed.scrollHeight;
+}
+
+/** 展开 / 收起对局记录（玩家的选择记在本地） */
+function setFeedOpen(open, persist = true) {
+  const box = $('feed-box');
+  if (!box) return;
+  box.classList.toggle('is-open', !!open);
+  $('feed-toggle')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) {
+    const feed = $('feed');
+    if (feed) feed.scrollTop = feed.scrollHeight;
+  }
+  if (persist) localStorage.setItem('sg.feedOpen', open ? 'on' : 'off');
+}
+
+function bindFeedToggle() {
+  $('feed-toggle')?.addEventListener('click', () => {
+    setFeedOpen(!$('feed-box').classList.contains('is-open'));
+  });
 }
 
 const nameOf = (view, id) => view.players.find((p) => p.id === id)?.name || '?';
@@ -1229,10 +1256,13 @@ export function init() {
   bindOnlineScreen();
   bindLobby();
   bindGameMenu();
+  bindFeedToggle();
   bindSettings();
   renderRules();
   updateNameUI();
   refreshToggleLabels();
+  // 对局记录默认收起，玩家展开过就一直保持展开
+  setFeedOpen(localStorage.getItem('sg.feedOpen') === 'on', false);
 
   // 手机端首次点击时解锁音频
   document.addEventListener('pointerdown', () => sfx.ensure(), { once: true });

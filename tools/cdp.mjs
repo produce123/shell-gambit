@@ -117,7 +117,13 @@ export class Page {
     this.logs = [];
   }
 
-  static async launch({ headless = true, width = 430, height = 932, startUrl = 'about:blank' } = {}) {
+  static async launch({
+    headless = true,
+    width = 430,
+    height = 932,
+    mobile = false,
+    startUrl = 'about:blank',
+  } = {}) {
     const exe = findChrome();
     if (!exe) throw new Error('本机没有找到 Chrome 或 Edge');
     const port = await freePort();
@@ -181,7 +187,27 @@ export class Page {
 
     await conn.send('Page.enable');
     await conn.send('Runtime.enable');
+    // Windows 上的 Chrome 有最小窗口宽度（约 500px），--window-size=360,640 会被夹到 512，
+    // 想真的按 360px 这种手机宽度排版，必须用 Emulation 覆盖视口。
+    await page.setViewport(width, height, mobile);
     return page;
+  }
+
+  /**
+   * 把视口精确设成指定尺寸（默认带手机 emulation）。
+   * 不这么做的话，所谓「360×640 小屏手机」实际测的是 512px 宽的窗口。
+   */
+  async setViewport(width, height, mobile = false) {
+    await this.conn.send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: mobile ? 2 : 1,
+      mobile: !!mobile,
+      screenWidth: width,
+      screenHeight: height,
+    });
+    this.viewport = { width, height, mobile: !!mobile };
+    return this.viewport;
   }
 
   /** 执行 JS 表达式并取回值 */
