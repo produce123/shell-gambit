@@ -466,6 +466,7 @@ async function testOnlineSync(baseUrl) {
     let compared = 0;
     let timeouts = 0;
     let progressed = false;
+    let ended = false;
     const seen = new Set();
     for (let i = 0; i < 60; i++) {
       await stepOnce(a, { useItems: false });
@@ -484,17 +485,17 @@ async function testOnlineSync(baseUrl) {
       // 有人的血掉了、或进入第 2 轮，才说明对局确实在推进
       if (r.x.seats.some((s) => s.hp < 5) || r.x.round !== '1') progressed = true;
       const over = await a.eval(`return !document.getElementById('modal-layer').hidden;`);
-      if (process.env.SG_DEBUG) {
-        const [da, db] = await Promise.all([readBoard(a), readBoard(b)]);
-        console.log(
-          `      #${i} 甲 seq=${da.seq} turn=${da.turn} acts=${da.acts} hint="${da.hint}" modal=${da.modal}`
-            + ` | 乙 seq=${db.seq} turn=${db.turn} acts=${db.acts} hint="${db.hint}" modal=${db.modal}`
-        );
+      if (over) {
+        ended = true;
+        break;
       }
-      if (over) break;
     }
     ok(mismatches === 0, '两家在整局中看到的公开状态（血/手牌数/轮次/弹数）始终一致');
-    ok(compared >= 8, `确实做了足够多次比对（${compared} 次，其中 ${timeouts} 次等待收敛超时）`);
+    // 对局很短时会在 8 次之前就打完了，「提前打完」同样是合格结果
+    ok(
+      compared >= 8 || ended,
+      `确实做了足够多次比对（${compared} 次，其中 ${timeouts} 次等待收敛超时${ended ? '，且对局已打完' : ''}）`
+    );
     ok(progressed, `对局真的在推进（观察到 ${seen.size} 种不同的公开状态）`);
     if (!progressed || mismatches) {
       // 出问题时把两端的网络状态和界面提示一起打出来，方便定位
