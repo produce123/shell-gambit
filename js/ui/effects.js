@@ -10,6 +10,18 @@ import { sfx } from './audio.js';
 const fxLayer = () => document.getElementById('fx-layer');
 const toastLayer = () => document.getElementById('toast-layer');
 
+/* ------------------------------ 特效开关 ------------------------------ */
+
+let fxEnabled = localStorage.getItem('sg.fx') !== 'off';
+
+export const isFxEnabled = () => fxEnabled;
+
+/** 开/关特效（持久化）。关掉后仍保留文字事件流与横幅提示，只是不再有动画。 */
+export function setFxEnabled(on) {
+  fxEnabled = !!on;
+  localStorage.setItem('sg.fx', on ? 'on' : 'off');
+}
+
 /** 元素中心点（视口坐标） */
 export function centerOf(el) {
   if (!el) return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
@@ -24,6 +36,7 @@ export function centerOf(el) {
  * @param {'egg'|'flower'} kind
  */
 export function flyProjectile(fromEl, toEl, kind) {
+  if (!fxEnabled) return;
   const layer = fxLayer();
   if (!layer) return;
   const a = centerOf(fromEl);
@@ -62,6 +75,7 @@ export function flyProjectile(fromEl, toEl, kind) {
 
 /** 命中绽放 / 碎裂 */
 export function burst(atEl, kind) {
+  if (!fxEnabled) return;
   const layer = fxLayer();
   if (!layer) return;
   const { x, y } = centerOf(atEl);
@@ -101,6 +115,7 @@ export function burst(atEl, kind) {
 
 /** 枪口火光 */
 export function muzzleFlash(atEl) {
+  if (!fxEnabled) return;
   const layer = fxLayer();
   if (!layer) return;
   const { x, y } = centerOf(atEl);
@@ -123,6 +138,7 @@ export function muzzleFlash(atEl) {
 
 /** 伤害数字 */
 export function damageNumber(atEl, text) {
+  if (!fxEnabled) return;
   const layer = fxLayer();
   if (!layer) return;
   const { x, y } = centerOf(atEl);
@@ -147,6 +163,7 @@ export function damageNumber(atEl, text) {
 
 /** 整屏震动（开枪时） */
 export function shakeApp() {
+  if (!fxEnabled) return;
   const app = document.getElementById('app');
   if (!app) return;
   app.classList.remove('shake');

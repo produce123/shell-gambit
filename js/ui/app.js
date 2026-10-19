@@ -27,7 +27,9 @@ import {
   damageNumber,
   flyProjectile,
   hideModal,
+  isFxEnabled,
   muzzleFlash,
+  setFxEnabled,
   shakeApp,
   showModal,
   toast,
@@ -368,6 +370,30 @@ function wireSession(session) {
     leaveSession();
     show('online');
     toast(reason || '连接已断开', 'error');
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * 音效 / 特效开关（玩家自行设置，记在本地）
+ * ------------------------------------------------------------------ */
+
+function refreshToggleLabels() {
+  const s = $('toggle-sound');
+  const f = $('toggle-fx');
+  if (s) s.textContent = `🔊 音效：${sfx.enabled ? '开' : '关'}`;
+  if (f) f.textContent = `✨ 特效：${isFxEnabled() ? '开' : '关'}`;
+}
+
+function bindSettings() {
+  $('toggle-sound').addEventListener('click', () => {
+    sfx.setEnabled(!sfx.enabled);
+    refreshToggleLabels();
+    toast(`音效已${sfx.enabled ? '开启' : '关闭'}`);
+  });
+  $('toggle-fx').addEventListener('click', () => {
+    setFxEnabled(!isFxEnabled());
+    refreshToggleLabels();
+    toast(`特效已${isFxEnabled() ? '开启' : '关闭'}`);
   });
 }
 
@@ -1091,9 +1117,23 @@ function bindGameMenu() {
       state.role === 'host' ? '你是房主' : state.role === 'client' ? '你是客人' : '人机对局';
     showModal({
       title: '菜单',
-      body: `<p>房间：${state.session?.room || '单机'}<br />${role}</p>`,
+      body: `<p>房间：${escapeHtml(state.session?.room || '单机')}<br />${role}</p>`,
       actions: [
         { label: '继续游戏', primary: true, onClick: () => {} },
+        {
+          label: `🔊 音效：${sfx.enabled ? '开' : '关'}`,
+          onClick: () => {
+            sfx.setEnabled(!sfx.enabled);
+            refreshToggleLabels();
+          },
+        },
+        {
+          label: `✨ 特效：${isFxEnabled() ? '开' : '关'}`,
+          onClick: () => {
+            setFxEnabled(!isFxEnabled());
+            refreshToggleLabels();
+          },
+        },
         {
           label: '退出对局',
           onClick: () => {
@@ -1178,8 +1218,10 @@ export function init() {
   bindOnlineScreen();
   bindLobby();
   bindGameMenu();
+  bindSettings();
   renderRules();
   updateNameUI();
+  refreshToggleLabels();
 
   // 手机端首次点击时解锁音频
   document.addEventListener('pointerdown', () => sfx.ensure(), { once: true });

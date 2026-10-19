@@ -166,6 +166,56 @@ async function testLocalGame(baseUrl) {
       `首页有三大入口：${menus.join(' / ')}`
     );
 
+    // 音效 / 特效可以自行开关，并且记忆在本地
+    await page.click('#toggle-sound');
+    const soundOff = await page.eval(
+      `return document.getElementById('toggle-sound').textContent;`
+    );
+    ok(soundOff.includes('关'), `音效可以关掉（按钮变成「${soundOff}」）`);
+    const soundStored = await page.eval(`return localStorage.getItem('sg.sound');`);
+    ok(soundStored === 'off', '音效开关被记住了');
+
+    await page.click('#toggle-fx');
+    const fxOff = await page.eval(`return document.getElementById('toggle-fx').textContent;`);
+    ok(fxOff.includes('关'), `特效可以关掉（按钮变成「${fxOff}」）`);
+    ok(
+      (await page.eval(`return localStorage.getItem('sg.fx');`)) === 'off',
+      '特效开关被记住了'
+    );
+
+    // 关掉特效后不应该再有飞行动画层
+    await page.click('[data-go="ai"]');
+    await waitScreen(page, 'ai');
+    await page.setInput('#ai-name-input', '测');
+    await page.click('[data-players="2"]');
+    await waitScreen(page, 'game', 20000);
+    await page.waitFor(
+      `return document.querySelectorAll('#actions .act-btn').length > 0;`,
+      30000,
+      '轮到我行动'
+    );
+    await stepOnce(page, { useItems: false });
+    await sleep(400);
+    const fxCount = await page.eval(
+      `return document.querySelectorAll('#fx-layer > *').length;`
+    );
+    ok(fxCount === 0, `关掉特效后动画层是空的（实际 ${fxCount} 个元素）`);
+    // 文字事件流仍然要有，不能因为关特效就没了反馈
+    const feedCount = await page.eval(`return document.querySelectorAll('#feed .feed-item').length;`);
+    ok(feedCount > 0, `关掉特效后文字事件流仍在（${feedCount} 条）`);
+
+    // 回到首页并重新打开，验证开关被记住
+    await page.evalRaw(`document.getElementById('game-menu').click()`);
+    await sleep(250);
+    await page.click('#modal-layer .modal-actions button:last-child'); // 菜单最后一项＝退出对局
+    await waitScreen(page, 'home');
+    const persisted = await page.eval(
+      `return document.getElementById('toggle-sound').textContent + '|' + document.getElementById('toggle-fx').textContent;`
+    );
+    ok(persisted === '🔊 音效：关|✨ 特效：关', `重开界面后开关状态被记住（${persisted}）`);
+    await page.click('#toggle-sound');
+    await page.click('#toggle-fx');
+
     // 规则页
     await page.click('[data-go="rules"]');
     await waitScreen(page, 'rules');
@@ -228,7 +278,7 @@ async function testLocalGame(baseUrl) {
     await page.screenshot(`${SHOTS}e2e-local-over.png`);
 
     // 再来一局
-    await page.click('#modal-layer .modal-actions .primary-btn');
+    await page.click('#modal-layer .modal-actions button:first-child'); // 结算弹窗第一项＝再来一局
     await sleep(1200);
     const round = await page.eval(`return document.getElementById('hud-round').textContent;`);
     ok(round === '1', `再来一局从第 1 轮重新开始（实际第 ${round} 轮）`);
@@ -553,7 +603,7 @@ async function testLayout(baseUrl) {
       if (!onHome) {
         await page.evalRaw(`document.getElementById('game-menu').click()`);
         await sleep(250);
-        await page.click('#modal-layer .modal-actions .ghost-btn');
+        await page.click('#modal-layer .modal-actions button:last-child'); // 菜单最后一项＝退出对局
         await waitScreen(page, 'home');
       }
 

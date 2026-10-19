@@ -186,6 +186,19 @@ button:disabled {
   letter-spacing: 0.08em;
 }
 
+/* 音效 / 特效开关 */
+.home-settings {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.home-settings .ghost-btn {
+  height: 40px;
+  font-size: 12.5px;
+  padding: 0 12px;
+}
+
 /* ------------------------------ 通用顶栏 ------------------------------ */
 
 .bar {

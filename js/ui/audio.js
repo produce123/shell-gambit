@@ -12,7 +12,18 @@ class Sfx {
   constructor() {
     this.ctx = null;
     this.master = null;
-    this.enabled = true;
+    // 音效开关由玩家自己决定，并记在本地
+    this.enabled = localStorage.getItem('sg.sound') !== 'off';
+  }
+
+  /** 开/关音效（持久化） */
+  setEnabled(on) {
+    this.enabled = !!on;
+    localStorage.setItem('sg.sound', on ? 'on' : 'off');
+    if (on) {
+      this.ensure();
+      this.play('click');
+    }
   }
 
   /** 延迟创建 AudioContext（必须在用户手势里调用） */
