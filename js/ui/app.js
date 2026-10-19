@@ -48,6 +48,8 @@ const state = {
   lastEventN: 0,
   targetingItem: null,
   myId: null,
+  /** 当前这一局的唯一编号：用来忽略重复的开局消息 */
+  gameId: null,
   busy: false,
   overShown: false,
   seatEls: new Map(),
@@ -92,6 +94,7 @@ function leaveSession(reason) {
   state.role = null;
   state.view = null;
   state.myId = null;
+  state.gameId = null;
   state.busy = false;
   state.overShown = false;
   state.lastEventN = 0;
@@ -333,7 +336,15 @@ function enterLobby() {
 function wireSession(session) {
   session.on('lobby', (payload) => renderLobby(payload));
 
-  session.on('start', () => {
+  session.on('start', (payload) => {
+    // 开局消息会发两遍（广播 + 单播）以保证送达。
+    // 重复的那一条绝不能再清空棋盘：万一它晚于第一条状态帧到达，
+    // 就会把已经摆好的座位清光，正好轮到自己时直接卡死。
+    if (payload?.gameId && payload.gameId === state.gameId) {
+      show('game');
+      return;
+    }
+    state.gameId = payload?.gameId || null;
     state.overShown = false;
     state.lastEventN = 0;
     state.view = null;

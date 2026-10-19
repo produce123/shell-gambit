@@ -98,6 +98,7 @@ export class MqttClient {
     this.reconnectDelay = RECONNECT_BASE_MS;
     /** 记住订阅，重连后自动恢复 */
     this.subs = [];
+    this.pendingSubs = 0;
   }
 
   /** 第一次连接（不自动重试），成功返回 true */
@@ -110,10 +111,12 @@ export class MqttClient {
       if (this.closedByUs) return resolve(false);
       if (this.connected) return resolve(true);
       let settled = false;
+      let subDeadline = null;
       const done = (ok) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(subDeadline);
         resolve(ok);
       };
       const timer = setTimeout(() => {
@@ -169,18 +172,41 @@ export class MqttClient {
 
         for (const p of packets) {
           if (p.type === 2) {
-            // CONNACK
+            // CONNACK：连上了，但「连上」不等于「订阅已生效」——
+            // 必须等 SUBACK，否则这中间别人发来的消息会被 broker 丢掉，
+            // 表现就是开局第一个动作石沉大海。
             this.connected = true;
             this.reconnectDelay = RECONNECT_BASE_MS;
             this.startPing();
-            for (const t of this.subs) this._sendSubscribe(t);
-            this.onStatus('open');
-            done(true);
+            this.pendingSubs = 0;
+            for (const t of this.subs) {
+              this._sendSubscribe(t);
+              this.pendingSubs += 1;
+            }
+            if (this.pendingSubs === 0) {
+              this.onStatus('open');
+              done(true);
+            } else {
+              // 兜底：个别公共 broker 不回 SUBACK，等 1.5s 也当它可用
+              subDeadline = setTimeout(() => {
+                this.onStatus('open');
+                done(true);
+              }, 1500);
+            }
+          } else if (p.type === 9) {
+            // SUBACK：订阅真的生效了
+            if (this.pendingSubs > 0) {
+              this.pendingSubs -= 1;
+              if (this.pendingSubs === 0) {
+                this.onStatus('open');
+                done(true);
+              }
+            }
           } else if (p.type === 3) {
             const { topic, payload } = readPublish(p.body);
             this.onMessage(topic, payload);
           }
-          // PINGRESP(13) / SUBACK(9) 无需处理
+          // PINGRESP(13) 无需处理
         }
       };
     });

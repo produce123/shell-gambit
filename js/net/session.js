@@ -65,10 +65,10 @@ const RECONCILE_MS = 1500;
 
 /**
  * 客户端等回执的耐心值。
- * 超时就一边催房主补发状态、一边重发动作（房主按 actionId 去重），
- * 这样即使丢帧也只停顿一秒多，不会卡到让人以为死机。
+ * 公共通道是 QoS0，开局那一下偶尔会丢帧；600ms 就重发一次并催一次状态，
+ * 房主按 actionId 去重，所以重发绝对安全。最坏 2.4 秒内一定有结果。
  */
-const ACTION_RETRY_MS = 1600;
+const ACTION_RETRY_MS = 600;
 
 /* ================================================================== *
  * 房主
@@ -125,8 +125,9 @@ export class HostSession extends Emitter {
       throw new Error('连不上任何公共信令通道，请检查网络后重试');
     }
     this._announce();
-    // 每隔几秒再喊一次，方便晚进来的玩家找到房间
-    this.announceTimer = setInterval(() => this._announce(), 5000);
+    // 每隔几秒再喊一次，方便晚进来的玩家找到房间。
+    // 还没开局时喊得更勤一点：早一秒配对成功，玩家就少等一秒。
+    this.announceTimer = setInterval(() => this._announce(), 2500);
     this.emit('lobby', this.lobbyState());
     this.emit('net', { ...this.bus.status(), links: this.linkStatus(), role: 'host' });
     return n;
@@ -134,6 +135,14 @@ export class HostSession extends Emitter {
 
   _announce() {
     if (this.closed) return;
+    // 开局后玩家都已经连上了，没必要再频繁广播
+    if (this.started) {
+      const now = Date.now();
+      if (now - (this.lastAnnounceAt || 0) < 6000) return;
+      this.lastAnnounceAt = now;
+    } else {
+      this.lastAnnounceAt = Date.now();
+    }
     this.bus?.send('all', envelope({
       id: makeMsgId(this.selfId),
       from: this.selfId,
@@ -432,6 +441,9 @@ export class HostSession extends Emitter {
     });
 
     const payload = {
+      // 每局一个唯一编号：START 为了保证送达会发两遍（广播 + 单播），
+      // 客户端靠它认出重复的那一条，避免把已经打起来的棋盘清空
+      gameId: `g${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
       players: this.match.state.players.map((p) => ({ id: p.id, name: p.name, seat: p.seat })),
       aiIds: list.filter((p) => p.isAi).map((p) => p.id),
       // 注意：绝不能把 seed 发给客户端 —— 拿到 seed 就能复现洗牌、推出弹序
@@ -833,7 +845,7 @@ export class ClientSession extends Emitter {
     }));
     clearTimeout(this.retryTimer);
     // 只重试 2 次：再久就该让玩家重来了，绝不能让人对着"等待中"干等
-    if (record.tries < 3) {
+    if (record.tries < 4) {
       // 公共通道是 QoS0，可能丢；没收到新状态就重发。房主按 actionId 去重。
       this.retryTimer = setTimeout(() => {
         if (this.pendingAction !== record || this.closed) return;

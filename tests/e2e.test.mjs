@@ -461,14 +461,17 @@ async function testOnlineSync(baseUrl) {
     await a.click('#lobby-actions .primary-btn');
     await Promise.all([waitScreen(a, 'game', 15000), waitScreen(b, 'game', 20000)]);
 
-    // 一步一步走，每走一步就确认两端收敛到同一帧、同一内容
+    // 一步一步走，每走一步就确认两端收敛到同一帧、同一内容。
+    // 节奏要像真人：每步之间留一点时间，让公网往返有机会发生，
+    // 并且一直打到分出胜负（或超时）为止，而不是固定跑多少次。
     let mismatches = 0;
     let compared = 0;
     let timeouts = 0;
     let progressed = false;
     let ended = false;
     const seen = new Set();
-    for (let i = 0; i < 60; i++) {
+    const deadline = Date.now() + 75000;
+    for (let i = 0; i < 500 && Date.now() < deadline; i++) {
       await stepOnce(a, { useItems: false });
       await stepOnce(b, { useItems: false });
       const r = await compareAtSameSeq(a, b);
@@ -484,31 +487,32 @@ async function testOnlineSync(baseUrl) {
       seen.add(boardKey(r.x));
       // 有人的血掉了、或进入第 2 轮，才说明对局确实在推进
       if (r.x.seats.some((s) => s.hp < 5) || r.x.round !== '1') progressed = true;
-      const over = await a.eval(`return !document.getElementById('modal-layer').hidden;`);
-      if (over) {
+      if (await a.eval(`return !document.getElementById('modal-layer').hidden;`)) {
         ended = true;
         break;
       }
+      await sleep(90);
     }
     ok(mismatches === 0, '两家在整局中看到的公开状态（血/手牌数/轮次/弹数）始终一致');
-    // 对局很短时会在 8 次之前就打完了，「提前打完」同样是合格结果
+    // 有时候一局很短，几步就打完了 —— 只要确实打完了，比对次数少也算合格
     ok(
-      compared >= 8 || ended,
-      `确实做了足够多次比对（${compared} 次，其中 ${timeouts} 次等待收敛超时${ended ? '，且对局已打完' : ''}）`
+      compared >= 8 || (ended && compared >= 4),
+      `确实做了足够多次比对（${compared} 次，其中 ${timeouts} 次等待收敛超时${ended ? '，对局已打完' : ''}）`
     );
     ok(progressed, `对局真的在推进（观察到 ${seen.size} 种不同的公开状态）`);
     if (!progressed || mismatches) {
       // 出问题时把两端的网络状态和界面提示一起打出来，方便定位
+      const [da, db] = await Promise.all([readBoard(a), readBoard(b)]);
       const [na, nb] = await Promise.all([
         a.eval(`return document.getElementById('lobby-net').textContent;`),
         b.eval(`return document.getElementById('lobby-net').textContent;`),
       ]);
-      const [ha, hb] = await Promise.all([
-        a.eval(`return document.getElementById('turn-hint').textContent;`),
-        b.eval(`return document.getElementById('turn-hint').textContent;`),
-      ]);
-      console.log(`      诊断 甲：${na} | 提示「${ha}」`);
-      console.log(`      诊断 乙：${nb} | 提示「${hb}」`);
+      for (const [tag, d, n] of [['甲', da, na], ['乙', db, nb]]) {
+        console.log(
+          `      诊断 ${tag}：seq=${d.seq} 轮=${d.round} 回合玩家=${d.turn} `
+            + `可点按钮=${d.acts} 提示「${d.hint}」 弹窗=${d.modal}\n             网络：${n}`
+        );
+      }
     }
     ok(
       await a.eval(`return !document.getElementById('modal-layer').hidden;`),
