@@ -1,0 +1,25 @@
+{
+  "name": "shell-gambit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shell Gambit — 纯前端 WebRTC 多人联机霰弹枪轮盘聚会小游戏（2–4 人，无需服务器）",
+  "type": "module",
+  "scripts": {
+    "serve": "node tools/serve.mjs 8080",
+    "test": "node tests/rules.test.mjs",
+    "test:sim": "node tests/sim.mjs 5000",
+    "test:net": "node tests/net.test.mjs",
+    "test:e2e": "node tests/e2e.test.mjs",
+    "test:all": "node tests/rules.test.mjs && node tests/sim.mjs 5000 && node tests/net.test.mjs && node tests/e2e.test.mjs"
+  },
+  "keywords": [
+    "game",
+    "webrtc",
+    "p2p",
+    "multiplayer",
+    "party-game",
+    "github-pages",
+    "zero-dependency"
+  ],
+  "license": "MIT"
+}

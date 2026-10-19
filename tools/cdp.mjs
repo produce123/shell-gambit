@@ -1,0 +1,302 @@
+/**
+ * Shell Gambit — 极简 CDP 驱动（开发/测试用）
+ *
+ * 为什么自己写：只为「用真实浏览器跑一遍端到端联机」这一个目的，
+ * 为此引入 puppeteer/playwright 属于杀鸡用牛刀（还要下载上百 MB 的浏览器）。
+ * Node 24 自带 fetch 与 WebSocket，够用了。
+ *
+ * 能力：启动无头 Chrome/Edge、导航、执行 JS、等条件、截图、收集控制台错误。
+ */
+
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import net from 'node:net';
+
+const CANDIDATES = [
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+];
+
+export function findChrome() {
+  return CANDIDATES.find((p) => existsSync(p)) || null;
+}
+
+function freePort() {
+  return new Promise((res, rej) => {
+    const s = net.createServer();
+    s.on('error', rej);
+    s.listen(0, '127.0.0.1', () => {
+      const p = s.address().port;
+      s.close(() => res(p));
+    });
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 一条 CDP 连接 */
+class Connection {
+  constructor(ws) {
+    this.ws = ws;
+    this.nextId = 0;
+    this.pending = new Map();
+    this.handlers = new Map();
+  }
+
+  static async open(url) {
+    const ws = new WebSocket(url);
+    await new Promise((res, rej) => {
+      ws.onopen = res;
+      ws.onerror = () => rej(new Error(`无法连接调试端口 ${url}`));
+    });
+    const c = new Connection(ws);
+    ws.onmessage = (ev) => c._onMessage(JSON.parse(ev.data));
+    ws.onclose = () => {
+      for (const p of c.pending.values()) p.reject(new Error('调试连接已关闭'));
+      c.pending.clear();
+    };
+    return c;
+  }
+
+  _onMessage(m) {
+    if (m.id) {
+      const p = this.pending.get(m.id);
+      if (!p) return;
+      this.pending.delete(m.id);
+      if (m.error) p.reject(new Error(`${m.error.message}${m.error.data ? ` ${m.error.data}` : ''}`));
+      else p.resolve(m.result);
+      return;
+    }
+    for (const cb of this.handlers.get(m.method) || []) {
+      try {
+        cb(m.params);
+      } catch (e) {
+        console.error('CDP 事件处理失败', e);
+      }
+    }
+  }
+
+  send(method, params = {}) {
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  on(method, cb) {
+    if (!this.handlers.has(method)) this.handlers.set(method, []);
+    this.handlers.get(method).push(cb);
+  }
+
+  close() {
+    try {
+      this.ws.close();
+    } catch {
+      /* 忽略 */
+    }
+  }
+}
+
+/** 一个浏览器标签页 */
+export class Page {
+  constructor(conn, proc, profile) {
+    this.conn = conn;
+    this.proc = proc;
+    this.profile = profile;
+    /** @type {string[]} 控制台错误与未捕获异常 */
+    this.errors = [];
+    /** @type {string[]} 所有 console 输出（调试用） */
+    this.logs = [];
+  }
+
+  static async launch({ headless = true, width = 430, height = 932, startUrl = 'about:blank' } = {}) {
+    const exe = findChrome();
+    if (!exe) throw new Error('本机没有找到 Chrome 或 Edge');
+    const port = await freePort();
+    const profile = mkdtempSync(join(tmpdir(), 'sg-chrome-'));
+    const args = [
+      `--remote-debugging-port=${port}`,
+      `--user-data-dir=${profile}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--disable-default-apps',
+      '--disable-sync',
+      '--disable-background-networking',
+      '--disable-features=Translate,OptimizationHints',
+      `--window-size=${width},${height}`,
+      startUrl,
+    ];
+    if (headless) args.unshift('--headless=new', '--disable-gpu', '--hide-scrollbars', '--mute-audio');
+
+    const proc = spawn(exe, args, { stdio: 'ignore', windowsHide: true });
+
+    // 等调试端口就绪
+    let target = null;
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      try {
+        const r = await fetch(`http://127.0.0.1:${port}/json/list`);
+        const list = await r.json();
+        target = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+        if (target) break;
+      } catch {
+        /* 还没起来 */
+      }
+      await sleep(150);
+    }
+    if (!target) {
+      try {
+        proc.kill();
+      } catch {
+        /* 忽略 */
+      }
+      throw new Error('浏览器调试端口没有就绪');
+    }
+
+    const conn = await Connection.open(target.webSocketDebuggerUrl);
+    const page = new Page(conn, proc, profile);
+
+    conn.on('Runtime.consoleAPICalled', (p) => {
+      const text = (p.args || [])
+        .map((a) => a.value ?? a.description ?? a.unserializableValue ?? '')
+        .join(' ');
+      page.logs.push(`[${p.type}] ${text}`);
+      if (p.type === 'error') page.errors.push(text);
+    });
+    conn.on('Runtime.exceptionThrown', (p) => {
+      const d = p.exceptionDetails;
+      const text = d.exception?.description || d.text || '未知异常';
+      page.errors.push(text);
+      page.logs.push(`[exception] ${text}`);
+    });
+
+    await conn.send('Page.enable');
+    await conn.send('Runtime.enable');
+    return page;
+  }
+
+  /** 执行 JS 表达式并取回值 */
+  async eval(expression) {
+    const r = await this.conn.send('Runtime.evaluate', {
+      expression: `(() => { ${expression} })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (r.exceptionDetails) {
+      throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+    }
+    return r.result.value;
+  }
+
+  /** 求值一段表达式（不包成函数体，允许返回对象） */
+  async evalRaw(expression) {
+    // 图省事写成 `return ...;` 也能用：自动包一层函数体
+    const expr = /^\s*return\b/.test(expression) ? `(() => { ${expression} })()` : expression;
+    const r = await this.conn.send('Runtime.evaluate', {
+      expression: expr,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (r.exceptionDetails) {
+      throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+    }
+    return r.result.value;
+  }
+
+  async goto(url) {
+    await this.conn.send('Page.navigate', { url });
+    await this.waitFor('return document.readyState === "complete"', 15000, '页面加载完成');
+  }
+
+  /** 轮询等待条件成立 */
+  async waitFor(expr, timeoutMs = 10000, label = expr) {
+    const deadline = Date.now() + timeoutMs;
+    let lastErr = null;
+    while (Date.now() < deadline) {
+      try {
+        if (await this.eval(expr)) return true;
+      } catch (e) {
+        lastErr = e;
+      }
+      await sleep(120);
+    }
+    throw new Error(
+      `等待超时（${timeoutMs}ms）：${label}${lastErr ? ` — 最后错误：${lastErr.message}` : ''}`
+    );
+  }
+
+  /** 点击一个选择器（用真实鼠标事件，走页面的事件委托） */
+  async click(selector, { index = 0 } = {}) {
+    // 只挑「真正显示出来」的元素：隐藏屏幕里的同名按钮尺寸为 0，
+    // 点它等于什么都没点，所以这里直接跳过
+    const box = await this.evalRaw(`(() => {
+      const all = [...document.querySelectorAll(${JSON.stringify(selector)})];
+      const visible = all.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 1 && r.height > 1 && getComputedStyle(el).visibility !== 'hidden';
+      });
+      const el = (visible.length ? visible : all)[${index}];
+      if (!el) return null;
+      el.scrollIntoView({ block: 'center' });
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, n: all.length, v: visible.length };
+    })()`);
+    if (!box) throw new Error(`找不到可点击元素：${selector}[${index}]`);
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await this.conn.send('Input.dispatchMouseEvent', {
+        type,
+        x: box.x,
+        y: box.y,
+        button: 'left',
+        buttons: type === 'mousePressed' ? 1 : 0,
+        clickCount: 1,
+      });
+    }
+  }
+
+  /** 在输入框里输入文字（逐字派发，兼容 input 事件驱动的校验） */
+  async type(selector, text) {
+    await this.click(selector);
+    await this.evalRaw(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.value = ''; el.focus(); })()`);
+    for (const ch of text) {
+      await this.conn.send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch, unmodifiedText: ch });
+      await this.conn.send('Input.dispatchKeyEvent', { type: 'keyUp', text: ch, unmodifiedText: ch });
+      // 无头模式下 Input.insertText 更稳，两者都发一次保证 value 被写入
+      await this.conn.send('Input.insertText', { text: ch });
+    }
+  }
+
+  /** 直接设置输入框的值并触发 input 事件（比模拟键盘稳定） */
+  async setInput(selector, text) {
+    await this.evalRaw(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      el.focus();
+      el.value = ${JSON.stringify(text)};
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+  }
+
+  async screenshot(path) {
+    const r = await this.conn.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(path, Buffer.from(r.data, 'base64'));
+    return path;
+  }
+
+  close() {
+    this.conn.close();
+    try {
+      this.proc.kill();
+    } catch {
+      /* 忽略 */
+    }
+  }
+}

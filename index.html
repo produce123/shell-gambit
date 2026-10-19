@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0a0c0f" />
+    <meta name="description" content="Shell Gambit — 纯前端 WebRTC 多人联机霰弹枪轮盘聚会小游戏，2–4 人，无需服务器。" />
+    <title>Shell Gambit · 恶魔轮盘聚会版</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230a0c0f'/><circle cx='16' cy='16' r='7' fill='none' stroke='%23e5484d' stroke-width='3'/><circle cx='16' cy='16' r='2.5' fill='%23e5484d'/></svg>" />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- ================= 首页 ================= -->
+      <section class="screen is-active" id="screen-home">
+        <div class="home-wrap">
+          <h1 class="logo">SHELL<span>GAMBIT</span></h1>
+          <p class="logo-sub">恶魔轮盘 · 聚会版 · 2–4 人</p>
+          <nav class="menu">
+            <button class="menu-btn" data-go="ai">
+              <b>人机对局</b><small>单人也能玩，AI 会出牌、会记仇</small>
+            </button>
+            <button class="menu-btn" data-go="online">
+              <b>在线对局</b><small>输入相同房间号即可联机，无需服务器</small>
+            </button>
+            <button class="menu-btn" data-go="rules">
+              <b>游戏规则</b><small>基础玩法与 7 种道具说明</small>
+            </button>
+          </nav>
+          <p class="foot-note">纯前端 P2P · WebRTC 直连 + 中转兜底</p>
+        </div>
+      </section>
+
+      <!-- ================= 人机对局：选择人数 ================= -->
+      <section class="screen" id="screen-ai">
+        <header class="bar">
+          <button class="icon-btn" data-back="home">←</button>
+          <h2>人机对局</h2>
+          <span class="bar-pad"></span>
+        </header>
+        <div class="pad">
+          <p class="hint">选择本局人数（你自己 + AI）</p>
+          <div class="count-grid" id="ai-counts">
+            <button class="count-btn" data-players="2"><b>2</b><small>1 个 AI</small></button>
+            <button class="count-btn" data-players="3"><b>3</b><small>2 个 AI</small></button>
+            <button class="count-btn" data-players="4"><b>4</b><small>3 个 AI</small></button>
+          </div>
+          <p class="hint" id="ai-name-hint">开局前先给自己取一个单字名字</p>
+          <div class="name-row">
+            <div class="avatar avatar-lg" id="ai-avatar">?</div>
+            <input
+              id="ai-name-input"
+              class="text-input"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="单字"
+              aria-label="你的名字（单字）"
+            />
+            <button class="ghost-btn" id="ai-name-random">随机</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 在线对局：设置名字 ================= -->
+      <section class="screen" id="screen-name">
+        <header class="bar">
+          <button class="icon-btn" data-back="online">←</button>
+          <h2>设置名字</h2>
+          <span class="bar-pad"></span>
+        </header>
+        <div class="pad">
+          <p class="hint">进入房间前必须先取一个<strong>单字</strong>名字，它会显示在头像上</p>
+          <div class="name-row">
+            <div class="avatar avatar-lg" id="name-avatar">?</div>
+            <input
+              id="name-input"
+              class="text-input"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="单字"
+              aria-label="你的名字（单字）"
+            />
+            <button class="ghost-btn" id="name-random">随机</button>
+          </div>
+          <div class="suggest" id="name-suggest"></div>
+          <button class="primary-btn" id="name-confirm" disabled>确定</button>
+        </div>
+      </section>
+
+      <!-- ================= 在线对局：创建 / 加入 ================= -->
+      <section class="screen" id="screen-online">
+        <header class="bar">
+          <button class="icon-btn" data-back="home">←</button>
+          <h2>在线对局</h2>
+          <span class="bar-pad"></span>
+        </header>
+        <div class="pad">
+          <div class="me-strip">
+            <div class="avatar" id="online-avatar">?</div>
+            <div class="me-info">
+              <b id="online-name">未设置名字</b>
+              <button class="link-btn" data-go="name">修改名字</button>
+            </div>
+          </div>
+
+          <button class="primary-btn" id="btn-create">创建房间</button>
+          <div class="divider"><span>或</span></div>
+          <label class="field-label" for="room-input">输入房间号加入</label>
+          <div class="join-row">
+            <input
+              id="room-input"
+              class="text-input room-input"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="5 位房间号"
+              aria-label="房间号"
+            />
+            <button class="primary-btn compact" id="btn-join" disabled>加入</button>
+          </div>
+          <p class="hint" id="online-status"></p>
+        </div>
+      </section>
+
+      <!-- ================= 房间大厅 ================= -->
+      <section class="screen" id="screen-lobby">
+        <header class="bar">
+          <button class="icon-btn" id="lobby-leave">←</button>
+          <h2>房间 <span class="room-code" id="lobby-room">-----</span></h2>
+          <span class="bar-pad"></span>
+        </header>
+        <div class="pad lobby-pad">
+          <div class="lobby-tip">
+            <span>把房间号告诉朋友：</span><b id="lobby-room-big">-----</b>
+            <button class="ghost-btn" id="lobby-copy">复制</button>
+          </div>
+          <ul class="roster" id="lobby-roster"></ul>
+          <div class="lobby-actions" id="lobby-actions"></div>
+          <p class="hint">点别人的头像可以扔 🥚 鸡蛋 / 🌸 鲜花</p>
+          <div class="net-line" id="lobby-net"></div>
+        </div>
+      </section>
+
+      <!-- ================= 对局 ================= -->
+      <section class="screen" id="screen-game">
+        <header class="hud">
+          <div class="hud-left">
+            <span class="hud-round">第 <b id="hud-round">1</b> 轮</span>
+          </div>
+          <div class="hud-mag">
+            <span class="chip chip-live"><i></i>实弹 <b id="hud-live">0</b></span>
+            <span class="chip chip-blank"><i></i>空弹 <b id="hud-blank">0</b></span>
+            <span class="chip chip-saw" id="hud-saw" hidden>已锯枪管 ×2</span>
+          </div>
+          <div class="hud-right">
+            <button class="icon-btn tiny" id="game-react" aria-label="互动" title="扔鸡蛋 / 鲜花">🥚</button>
+            <button class="icon-btn tiny" id="game-menu" aria-label="菜单">☰</button>
+          </div>
+        </header>
+
+        <div class="table">
+          <div class="seats" id="seats"></div>
+          <div class="feed" id="feed" aria-live="polite"></div>
+          <div class="banner" id="banner"></div>
+        </div>
+
+        <footer class="controls">
+          <div class="hand" id="hand"></div>
+          <div class="actions" id="actions"></div>
+          <div class="turn-hint" id="turn-hint"></div>
+        </footer>
+      </section>
+
+      <!-- ================= 规则 ================= -->
+      <section class="screen" id="screen-rules">
+        <header class="bar">
+          <button class="icon-btn" data-back="home">←</button>
+          <h2>游戏规则</h2>
+          <span class="bar-pad"></span>
+        </header>
+        <div class="pad rules-pad" id="rules-body"></div>
+      </section>
+    </div>
+
+    <!-- 动画层：飞行的鸡蛋/鲜花、枪口火光、伤害数字 -->
+    <div id="fx-layer" aria-hidden="true"></div>
+    <!-- 提示条 -->
+    <div id="toast-layer" aria-live="polite"></div>
+    <!-- 弹窗 -->
+    <div id="modal-layer" hidden></div>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
