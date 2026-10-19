@@ -3,6 +3,9 @@
 一个**纯前端、零依赖、无需服务器**的 2–4 人联机霰弹枪轮盘小游戏。
 直接把仓库传到 GitHub Pages 就能玩：一个人开房，其他人输入同一个房间号即可加入。
 
+**在线玩：** https://produce123.github.io/shell-gambit/
+（若你的账号配置了 Pages 自定义域名，也可用 https://home.prodhub.me/shell-gambit/ ）
+
 > 灵感来自《Buckshot Roulette（恶魔轮盘）》，针对「朋友聚会、手机随手玩」重新设计：
 > 随机座位、每轮随机装弹、7 种道具、纯前端 P2P 联机。
 
@@ -204,6 +207,9 @@ node tests/sim.mjs 20000         # 每种人数自对弈 20000 局，检查不�
 node tests/net.test.mjs          # 真实公共信令通道的联机集成测试
 node tests/e2e.test.mjs          # 真实无头浏览器端到端测试
 node tests/e2e.test.mjs layout   # 只跑自适应布局体检
+
+# 直接对线上部署做端到端验证（不启本地服务器，直接打真实网址）
+node tests/e2e.test.mjs https://produce123.github.io/shell-gambit/
 ```
 
 也可以用 `npm run test:all` 一次跑完（需要本机装有 Chrome 或 Edge）。

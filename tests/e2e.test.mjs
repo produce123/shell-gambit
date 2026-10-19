@@ -627,20 +627,32 @@ async function main() {
     return;
   }
   mkdirSync(SHOTS, { recursive: true });
-  const server = await startServer(0);
-  console.log(`本地预览服务：${server.url}`);
+
+  // 可以传入一个真实网址，直接对线上部署做端到端验证：
+  //   node tests/e2e.test.mjs local https://produce123.github.io/shell-gambit/
+  const urlArg = process.argv.find((a) => /^https?:\/\//i.test(a));
+  const only = process.argv.slice(2).find((a) => !/^https?:\/\//i.test(a));
+  let server = null;
+  let baseUrl = urlArg;
+  if (baseUrl) {
+    console.log(`目标站点（线上）：${baseUrl}`);
+  } else {
+    server = await startServer(0);
+    baseUrl = server.url;
+    console.log(`本地预览服务：${baseUrl}`);
+  }
+
   const t0 = Date.now();
   try {
-    const only = process.argv[2];
-    if (!only || only === 'local') await testLocalGame(server.url);
-    if (!only || only === 'online') await testOnlineGame(server.url);
-    if (!only || only === 'sync') await testOnlineSync(server.url);
-    if (!only || only === 'layout') await testLayout(server.url);
+    if (!only || only === 'local') await testLocalGame(baseUrl);
+    if (!only || only === 'online') await testOnlineGame(baseUrl);
+    if (!only || only === 'sync') await testOnlineSync(baseUrl);
+    if (!only || only === 'layout') await testLayout(baseUrl);
   } catch (err) {
     failures.push(err.message);
     console.error('用例中断：', err);
   } finally {
-    await server.close();
+    await server?.close();
   }
 
   console.log(
