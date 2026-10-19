@@ -188,9 +188,10 @@ function startRound(state) {
   const load = reloadMagazine(state);
   pushEvent(state, { t: 'round', round: state.round, live: load.live, blank: load.blank });
 
-  // 1 号为每轮的开始；1 号已淘汰则顺延到下一个存活座位
+  // 1 号为每轮的开始；1 号已淘汰则顺延到下一个存活座位。
+  // 如果 1 号还戴着手铐（上一轮没轮到他行动就结束/换弹了），一样要跳过。
   const first = alivePlayers(state)[0];
-  state.turn = first.id;
+  state.turn = pickNextPlayer(state, first.id, { exclusive: false }) || first.id;
   beginTurn(state);
 }
 
@@ -617,32 +618,64 @@ function afterShellConsumed(state) {
   return true;
 }
 
-/** 结束当前回合，把回合交给下一位存活玩家（跳过并解除被手铐锁住的人） */
+/**
+ * 选出「下一个真正能行动的人」，顺手把被跳过者的手铐用掉。
+ *
+ * 手铐在「这一回合被跳过」的那一刻就消耗掉了，所以这里只要判定 cuffed 就跳过并解除。
+ *
+ * @param {string} fromId  从谁开始往后找
+ * @param {{exclusive?: boolean}} opts
+ *   exclusive=true（回合交接）：只在 fromId **以外**的人里找；
+ *   exclusive=false（每轮开始）：从 fromId 本人开始找。
+ *
+ * 为什么要单独写这个函数：回合交接时如果「其他人都被锁住」，
+ * 回合必须回到 fromId 本人身上 —— 不能顺延给「下一个人」。
+ * 那个人刚刚已经被跳过、手铐也解除过了，再让他行动等于白送一个回合，
+ * 这正是「品被手铐跳过之后照样摸牌出牌开枪」的根因。
+ */
+function pickNextPlayer(state, fromId, { exclusive = true } = {}) {
+  const alive = alivePlayers(state);
+  if (alive.length <= 1) return alive[0]?.id ?? null;
+  const startIdx = Math.max(0, alive.findIndex((p) => p.id === fromId));
+
+  // 候选顺序：只绕一圈
+  const candidates = [];
+  for (let k = exclusive ? 1 : 0; k <= alive.length - 1; k++) {
+    candidates.push(alive[(startIdx + k) % alive.length]);
+  }
+
+  const free = candidates.find((p) => !p.cuffed);
+  if (free) {
+    // free 之前的人全被跳过（手铐在这里消耗掉）
+    for (const p of candidates) {
+      if (p === free) break;
+      p.cuffed = false;
+      pushEvent(state, { t: 'skip', player: p.id });
+    }
+    return free.id;
+  }
+
+  // 候选里全员戴着手铐：手铐只能作废，否则整局直接死锁
+  for (const p of alive) p.cuffed = false;
+  if (exclusive) {
+    // 回合交接：其他人都丢掉了这一回合，那么继续由 fromId 行动
+    for (const p of candidates) pushEvent(state, { t: 'skip', player: p.id });
+    return alive[startIdx].id;
+  }
+  // 每轮开始：全员被锁，解除后由第一位行动（不发 skip，免得「跳过了又马上行动」自相矛盾）
+  return candidates[0].id;
+}
+
+/** 结束当前回合，把回合交给下一位能行动的存活玩家 */
 function endTurn(state) {
   if (state.phase !== 'playing') return;
   state.pending = null;
   const alive = alivePlayers(state);
   if (alive.length <= 1) return;
 
-  const startIdx = alive.findIndex((p) => p.id === state.turn);
-  if (startIdx < 0) {
-    state.turn = alive[0].id;
-    beginTurn(state);
-    return;
-  }
-  for (let k = 1; k < alive.length; k++) {
-    const p = alive[(startIdx + k) % alive.length];
-    if (p.cuffed) {
-      p.cuffed = false;
-      pushEvent(state, { t: 'skip', player: p.id });
-      continue;
-    }
-    state.turn = p.id;
-    beginTurn(state);
-    return;
-  }
-  // 极端情况：其余所有存活玩家都被手铐锁住 → 顺延到下一个存活玩家，绝不死锁
-  state.turn = alive[(startIdx + 1) % alive.length].id;
+  const next = pickNextPlayer(state, state.turn, { exclusive: true });
+  if (!next) return;
+  state.turn = next;
   beginTurn(state);
 }
 
@@ -755,6 +788,8 @@ export function checkInvariants(state) {
     const t = playerById(state, state.turn);
     if (!t) bad.push(`回合指向不存在的玩家: ${state.turn}`);
     else if (!t.alive) bad.push(`回合指向已淘汰玩家: ${state.turn}`);
+    // 被手铐锁住的人必须被跳过；回合落在他身上说明跳过逻辑漏了
+    else if (t.cuffed) bad.push(`回合指向被手铐锁住的玩家（该跳过却没跳过）: ${state.turn}`);
     if (!hasShell(state)) bad.push('对局进行中但弹匣为空');
     if (state.pending && state.pending.actorId !== state.turn) {
       bad.push('挂起目标选择，但回合不属于该玩家');

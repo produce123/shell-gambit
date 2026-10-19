@@ -350,6 +350,81 @@ test('手铐：被铐的对手跳过下一回合', () => {
   eq(s.turn, c.id, 'b 被跳过，回合直接给 c');
 });
 
+test('手铐（回归）：2 人局里被跳过的人不能反过来拿到回合', () => {
+  // 用户实测的那一把：神铐住品 → 空弹打自己（保留回合）→ 空弹打品（结束回合）。
+  // 记录里「品 被手铐跳过回合」后面紧跟着「品 摸了 2 张牌」，品白拿一个回合。
+  // 根因：endTurn 在「其他人都被跳过」时把回合顺延给了 alive[startIdx+1] ——
+  // 正是刚刚被跳过、手铐也已经解除的那个人。2 人局里 100% 命中。
+  const s = mk(2, 402);
+  setMagazine(s, ['blank', 'blank', 'blank', 'blank', 'blank', 'blank']);
+  const a = bySeat(s, 1); // 品
+  const b = bySeat(s, 2); // 神
+  setTurn(s, a.id);
+  setHand(s, a.id, ['cigarette']);
+  setHand(s, b.id, ['handcuffs', 'cigarette']);
+
+  act(s, a.id, { type: 'shoot', targetId: b.id }); // 空弹打别人 → 交棒
+  eq(s.turn, b.id, '回合交给 b');
+
+  const aHandBefore = byId(s, a.id).hand.length;
+  act(s, b.id, { type: 'use', item: 'handcuffs', targetId: a.id });
+  eq(byId(s, a.id).cuffed, true, 'a 被铐住');
+  act(s, b.id, { type: 'shoot', targetId: b.id }); // 空弹打自己 → 保留回合
+  eq(s.turn, b.id, '空弹打自己保留回合');
+
+  const ev = act(s, b.id, { type: 'shoot', targetId: a.id }); // 空弹打别人 → 结束回合
+  assert(
+    ev.some((e) => e.t === 'skip' && e.player === a.id),
+    'a 被手铐跳过'
+  );
+  eq(byId(s, a.id).cuffed, false, 'a 的手铐在跳过时解除');
+  eq(s.turn, b.id, 'a 是唯一的对手，被跳过之后回合必须回到 b');
+  eq(byId(s, a.id).hand.length, aHandBefore, 'a 一张牌都不该摸到');
+  assert(!ev.some((e) => e.t === 'turn' && e.player === a.id), 'a 不该有摸牌事件');
+  eq(checkInvariants(s), [], '不变量');
+});
+
+test('手铐（回归）：其他人都被锁住时，回合回到自己身上而不是白送给别人', () => {
+  const s = mk(3, 403);
+  setMagazine(s, ['blank', 'blank', 'blank', 'blank', 'blank', 'blank']);
+  const a = bySeat(s, 1);
+  const b = bySeat(s, 2);
+  const c = bySeat(s, 3);
+  setTurn(s, a.id);
+  setHand(s, a.id, ['handcuffs', 'handcuffs']);
+
+  act(s, a.id, { type: 'use', item: 'handcuffs', targetId: b.id });
+  act(s, a.id, { type: 'use', item: 'handcuffs', targetId: c.id });
+  const ev = act(s, a.id, { type: 'shoot', targetId: b.id }); // 空弹打别人 → 结束回合
+
+  assert(ev.some((e) => e.t === 'skip' && e.player === b.id), 'b 被跳过');
+  assert(ev.some((e) => e.t === 'skip' && e.player === c.id), 'c 被跳过');
+  eq(s.turn, a.id, 'b、c 都被跳过，回合回到 a');
+  eq(byId(s, b.id).cuffed, false, 'b 手铐解除');
+  eq(byId(s, c.id).cuffed, false, 'c 手铐解除');
+  assert(!ev.some((e) => e.t === 'turn' && (e.player === b.id || e.player === c.id)), '被跳过的人不该摸牌');
+  eq(checkInvariants(s), [], '不变量');
+});
+
+test('手铐（回归）：每轮开始时 1 号戴着手铐也要被跳过', () => {
+  const s = mk(2, 404);
+  const a = bySeat(s, 1);
+  const b = bySeat(s, 2);
+  setTurn(s, b.id);
+  setHand(s, b.id, ['handcuffs', 'cigarette']);
+  act(s, b.id, { type: 'use', item: 'handcuffs', targetId: a.id });
+  eq(byId(s, a.id).cuffed, true, 'a 被铐住');
+
+  // 直接触发换弹（弹匣耗尽）→ 新一轮由 1 号开始，但 1 号还锁着
+  setMagazine(s, ['blank']);
+  const ev = act(s, b.id, { type: 'shoot', targetId: b.id }); // 打自己打完最后一发 → 换弹
+  assert(ev.some((e) => e.t === 'round'), '触发了换弹');
+  assert(ev.some((e) => e.t === 'skip' && e.player === a.id), '新一轮开始时 a 被跳过');
+  eq(s.turn, b.id, '回合给到 b 而不是被锁住的 a');
+  eq(byId(s, a.id).cuffed, false, '手铐解除');
+  eq(checkInvariants(s), [], '不变量');
+});
+
 test('手铐：不能铐自己，也不能铐已被铐住的人', () => {
   const s = mk(3, 401);
   const a = bySeat(s, 1);

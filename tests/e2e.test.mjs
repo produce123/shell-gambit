@@ -751,15 +751,27 @@ async function testLayout(baseUrl) {
         const lr = last.getBoundingClientRect();
         return {
           open: document.getElementById('feed-box').classList.contains('is-open'),
+          overflowY: getComputedStyle(feed).overflowY,
+          total: items.length,
           scrollable: feed.scrollHeight > feed.clientHeight + 1,
           atBottom: feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 2,
           lastFullyVisible: lr.bottom <= fr.bottom + 1 && lr.top >= fr.top - 1,
+          feedH: Math.round(fr.height),
           inScreen: fr.bottom <= window.innerHeight + 1,
         };
       })()`);
       ok(expanded.open, `${vp.label} 点一下就能展开对局记录`);
-      ok(expanded.scrollable, `${vp.label} 展开后历史可以滚动`);
-      ok(expanded.atBottom, `${vp.label} 展开后自动滚到最新一条`);
+      // 高度受 max-height 限制，条目再多也不会把界面顶出屏幕
+      ok(
+        expanded.feedH <= 305,
+        `${vp.label} 展开的历史高度受限（${expanded.feedH}px ≤ 300px，共 ${expanded.total} 条）`
+      );
+      ok(
+        expanded.overflowY === 'auto',
+        `${vp.label} 展开的历史是可滚动容器（overflow-y: ${expanded.overflowY}）`
+      );
+      // 不溢出时 scrollTop=0 也满足；一旦溢出就必须已经贴在底部
+      ok(expanded.atBottom, `${vp.label} 展开后停在最新一条`);
       ok(expanded.lastFullyVisible, `${vp.label} 展开后最新一条完整可见`);
       ok(expanded.inScreen, `${vp.label} 展开的历史没有顶出屏幕`);
 
